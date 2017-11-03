@@ -27,7 +27,7 @@
 .EXAMPLE
     
 .NOTES
-    Author: dklempfner@gmail.com
+    Author: david.klempfner@Company1.ghi.au (or david.klempfner@avanade.com if no longer at Company1)
     Date: 29/06/2017
 
     Updates:
@@ -35,8 +35,25 @@
     Now checking cross domain groups (ie AnotherDomain groups).
 #>
 
-Param([String]$GroupDistinguishedName = 'CN=SomeGroupName,OU=Application Groups,OU=Groups,OU=Abc,DC=Def,DC=Ghi,DC=Jkl,DC=AU',
+Param([String]$GroupDistinguishedName = 'CN=CHROME,OU=Application Groups,OU=Groups,OU=Company1,DC=DEF,DC=AnotherDomain,DC=jkl,DC=AU',
       [Object[]]$PropertiesToLoad  = @('objectclass', 'member', 'name', 'distinguishedname'))
+
+function WriteProgress
+{
+    Param([Parameter(Mandatory = $true)][Int32]$Numerator,
+          [Parameter(Mandatory = $true)][Int32]$Denominator,
+          [Parameter(Mandatory = $true)][String]$Status)
+
+    $percentComplete = [int](($Numerator/$Denominator)*100)
+    if($percentComplete -le 100)
+    {
+        Write-Progress -Activity $Status -Status "$Numerator/$Denominator -  $percentComplete%" -PercentComplete $percentComplete
+    }
+    else
+    {
+        Write-Warning "Cannot call Write-Progress. $percentComplete% is not valid."
+    }
+}
 
 function GetDirectorySearcher
 {
@@ -46,7 +63,8 @@ function GetDirectorySearcher
     $directoryEntry = New-Object 'System.DirectoryServices.DirectoryEntry'    
     $directoryEntry.Path = $LdapPath
     $searcher = New-Object 'System.DirectoryServices.DirectorySearcher'($directoryEntry)
-    $searcher.SearchScope = [System.DirectoryServices.SearchScope]::SubTree    
+    $searcher.SearchScope = [System.DirectoryServices.SearchScope]::SubTree
+    $searcher.SizeLimit = [System.Int32]::MaxValue
     $searcher.PageSize = [System.Int32]::MaxValue
     
     if($Properties)
@@ -70,15 +88,6 @@ function GetNestingLevel
     $levelOfNesting = $nestedGroupNamesSplitByDelimeterWithNoBlanks.Count - 1
 
     return $levelOfNesting
-}
-
-function IsNameSid
-{
-    param([Parameter(Mandatory=$true)][String]$Name)
-
-    $sidPattern = '^S-\d-\d+-(\d+-){1,14}\d+$'
-    $isValidFormat = [Regex]::IsMatch($Name, $sidPattern)
-    return $isValidFormat
 }
 
 function GetNameFromSid
@@ -113,36 +122,113 @@ function GetObjectClass
     return $objectClass
 }
 
+function IsMemberFromAnotherDomain
+{
+    param([Parameter(Mandatory=$false)][System.DirectoryServices.ResultPropertyValueCollection]$ObjectClasses)
+
+    $objectClass = GetObjectClass $memberAdObject.Properties.objectclass
+    $isMemberFromAnotherDomain = $objectClass -eq 'foreignSecurityPrincipal'
+    return $isMemberFromAnotherDomain
+}
+
+function GetAllMembersOfGroup
+{
+    param([Parameter(Mandatory=$true)][String]$LdapPath)
+
+    $allMembers = New-Object 'System.Collections.Generic.List[String]'
+    
+    $pageSize = 1500
+
+    $pageIndex = 0
+    $startIndex = 0
+    $endIndex = 0
+
+    $shouldExitLoop = $false
+
+    while(!$shouldExitLoop)
+    {                
+        $startIndex = $pageIndex * $pageSize
+        $endIndex = (($pageIndex + 1) * $pageSize) - 1                
+        $propertyName = GetMemberRangePropertyName $startIndex $endIndex
+        $pageIndex++
+
+        $propertiesToLoad = @($propertyName)
+        $tempDirSearcher = GetDirectorySearcher $LdapPath $propertiesToLoad
+        $result = $null
+        $adObjectsMembers = $null
+        try
+        {
+            $result = $tempDirSearcher.FindOne()
+        }
+        catch
+        {
+            $errorMessage = $_.Exception.Message            
+            Write-Warning "Failed search - $errorMessage"
+        }   
+        $adObjectsMembers = $result.Properties.$propertyName
+        if(!$adObjectsMembers)
+        {
+            $propertyName = GetMemberRangePropertyName $startIndex '*'
+            $adObjectsMembers = $result.Properties.$propertyName
+            $shouldExitLoop = $true
+        }
+        AddMembersToList $adObjectsMembers $allMembers        
+    }
+
+    return $allMembers
+}
+
+function AddMembersToList
+{
+    param([Parameter(Mandatory=$true)][System.DirectoryServices.ResultPropertyValueCollection]$AdObjectsMembers,
+          [Parameter(Mandatory=$false)][System.Collections.Generic.List[String]]$AllMembers)
+
+    foreach($member in $AdObjectsMembers)
+    {
+        $AllMembers.Add($member)
+    }
+}
+
+function GetMemberRangePropertyName
+{
+    param([Parameter(Mandatory=$true)][String]$StartIndex,
+          [Parameter(Mandatory=$true)][String]$EndIndex)
+
+    return "member;range=$StartIndex-$EndIndex"
+}
+
 function CreateListOfMembers
 {
-    param([Parameter(Mandatory=$true)][System.DirectoryServices.ResultPropertyValueCollection]$Members,
+    param([Parameter(Mandatory=$true)][Object[]]$Members,
           [Parameter(Mandatory=$true)][Object[]]$PropertiesToLoad,
           [Parameter(Mandatory=$true)][String]$NestedGroupNames,
           [Parameter(Mandatory=$false)][System.Collections.Generic.List[PSCustomObject]]$ListOfMembers)
     
     $delimeter = '|'
 
-    foreach($distinguishedName in $members)
+    for($k = 0; $k -lt $members.Count; $k++)
     {
+        $distinguishedName = $members[$k]
+        WriteProgress ($k+1) $members.Count "Searching for $distinguishedName"
         $memberLdapPath = "LDAP://$distinguishedName"
-        $tempDirSearcher = GetDirectorySearcher $memberLdapPath $PropertiesToLoad 
+        $tempDirSearcher = GetDirectorySearcher $memberLdapPath $PropertiesToLoad
         $memberAdObject = $tempDirSearcher.FindOne()
 
         if($memberAdObject -and $memberAdObject.Properties.name.Count -gt 0)
         {
             $name = $memberAdObject.Properties.name[0]
-            $isNameSid = IsNameSid $name
-            if($isNameSid)
+            $isMemberFromAnotherDomain = IsMemberFromAnotherDomain $memberAdObject.Properties.objectclass
+            if($isMemberFromAnotherDomain)
             {
                 $name = GetNameFromSid $name
                 $name = RemoveDomainNameFromStartOfName $name
-                $distinguishedName = "CN=$name,OU=Applications,DC=AnotherDomain,DC=Jkl,DC=AU"
+                $distinguishedName = "CN=$name,OU=Applications,DC=AnotherDomain,DC=jkl,DC=AU"
                 $memberLdapPath = "LDAP://$distinguishedName"
                 $tempDirSearcher = GetDirectorySearcher $memberLdapPath $PropertiesToLoad
                 $memberAdObject = $null
                 try
                 {
-                    $memberAdObject = $tempDirSearcher.FindAll()
+                    $memberAdObject = $tempDirSearcher.FindOne()
                 }
                 catch
                 {
@@ -162,9 +248,20 @@ function CreateListOfMembers
                     continue
                 }
                 $newNestedGroupNames = "$distinguishedName$delimeter$NestedGroupNames"
-                if($memberAdObject.Properties.member)
+                $areThereBetween1and1500Members = $memberAdObject.Properties.member -and $memberAdObject.Properties.member.Count -gt 0
+                $areThereMoreThan1500Members = $memberAdObject.Properties.'member;range=0-1499' -and $memberAdObject.Properties.'member;range=0-1499'.Count -gt 0
+                if($areThereBetween1and1500Members -or $areThereMoreThan1500Members)
                 {
-                    CreateListOfMembers $memberAdObject.Properties.member $PropertiesToLoad $newNestedGroupNames $ListOfMembers
+                    $currentAdObjectsMembers = ''
+                    if($areThereBetween1and1500Members)
+                    {
+                        $currentAdObjectsMembers = $memberAdObject.Properties.member | ForEach-Object { $_ }
+                    }
+                    elseif($areThereMoreThan1500Members)
+                    {
+                        $currentAdObjectsMembers = GetAllMembersOfGroup $memberAdObject.Path
+                    }
+                    CreateListOfMembers $currentAdObjectsMembers $PropertiesToLoad $newNestedGroupNames $ListOfMembers
                 }
             }
             else
@@ -185,7 +282,8 @@ $listOfMembers = New-Object 'System.Collections.Generic.List[PSCustomObject]'
 $directorySearcher = GetDirectorySearcher $LdapPath $propertiesToLoad
 $result = $directorySearcher.FindOne()
 
-CreateListOfMembers $result.Properties.member $PropertiesToLoad $GroupDistinguishedName $listOfMembers
+$members = $result.Properties.member | ForEach-Object { $_ }
+CreateListOfMembers $members $PropertiesToLoad $GroupDistinguishedName $listOfMembers
 
 #Output the custom objects:
-$listOfMembers | Export-Csv '\\SomeServer.Def.Ghi.Jkl.au\c$\Migration Activities\Scripts\Working\ManuallyRunScripts\RecursivelyFindUsersInAdGroup\OutputFile.csv' -NoTypeInformation
+$listOfMembers | Export-Csv '\\SomeServer\c$\\OutputFile.csv' -NoTypeInformation
