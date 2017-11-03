@@ -32,7 +32,7 @@
 
     Updates:
     Date: 02/08/2017
-    Now checking cross domain groups (ie mno groups).
+    Now checking cross domain groups (ie AnotherDomain groups).
 #>
 
 Param([String]$GroupDistinguishedName = 'CN=SomeGroupName,OU=Application Groups,OU=Groups,OU=Abc,DC=Def,DC=Ghi,DC=Jkl,DC=AU',
@@ -106,7 +106,7 @@ function GetObjectClass
     param([Parameter(Mandatory=$false)][System.DirectoryServices.ResultPropertyValueCollection]$ObjectClasses)
     if(!$ObjectClasses)
     {
-        return 'mno USER'
+        return 'AnotherDomain USER'
     }
     $lastElementInArray = $ObjectClasses.Count-1
     $objectClass = $objectClasses[$lastElementInArray]
@@ -136,7 +136,7 @@ function CreateListOfMembers
             {
                 $name = GetNameFromSid $name
                 $name = RemoveDomainNameFromStartOfName $name
-                $distinguishedName = "CN=$name,OU=Applications,DC=mno,DC=Jkl,DC=AU"
+                $distinguishedName = "CN=$name,OU=Applications,DC=AnotherDomain,DC=Jkl,DC=AU"
                 $memberLdapPath = "LDAP://$distinguishedName"
                 $tempDirSearcher = GetDirectorySearcher $memberLdapPath $PropertiesToLoad
                 $memberAdObject = $null
@@ -147,7 +147,7 @@ function CreateListOfMembers
                 catch
                 {
                     $errorMsg = $_.Exception.Message
-                    Write-Warning "Tried searching for a group called $name. It's probably a user on another domain and not a group - $errorMsg"
+                    Write-Warning "Tried searching for a group called $name. It's probably a AnotherDomain user and not a group - $errorMsg"
                 }
             }
 
@@ -188,4 +188,4 @@ $result = $directorySearcher.FindOne()
 CreateListOfMembers $result.Properties.member $PropertiesToLoad $GroupDistinguishedName $listOfMembers
 
 #Output the custom objects:
-$listOfMembers | Export-Csv 'C:\Temp\OutputFile.csv' -NoTypeInformation
+$listOfMembers | Export-Csv '\\SomeServer.Def.Ghi.Jkl.au\c$\Migration Activities\Scripts\Working\ManuallyRunScripts\RecursivelyFindUsersInAdGroup\OutputFile.csv' -NoTypeInformation
