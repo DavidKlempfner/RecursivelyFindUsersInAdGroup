@@ -27,7 +27,7 @@
 .EXAMPLE
     
 .NOTES
-    Author: david.klempfner@Company1.ghi.au (or david.klempfner@avanade.com if no longer at Company1)
+    Author: dklempfner@gmail.com
     Date: 29/06/2017
 
     Updates:
@@ -286,4 +286,4 @@ $members = $result.Properties.member | ForEach-Object { $_ }
 CreateListOfMembers $members $PropertiesToLoad $GroupDistinguishedName $listOfMembers
 
 #Output the custom objects:
-$listOfMembers | Export-Csv '\\SomeServer\c$\\OutputFile.csv' -NoTypeInformation
+$listOfMembers | Export-Csv '\\SomeServer\c$\OutputFile.csv' -NoTypeInformation
