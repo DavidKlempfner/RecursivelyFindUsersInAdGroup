@@ -276,7 +276,6 @@ function CreateListOfMembers
 
 cls
 
-
 $ldapPath = "LDAP://$GroupDistinguishedName"
 $listOfMembers = New-Object 'System.Collections.Generic.List[PSCustomObject]'
 $directorySearcher = GetDirectorySearcher $LdapPath $propertiesToLoad
